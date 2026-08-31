@@ -7,6 +7,11 @@ from typing import Any
 
 import requests
 
+
+class HubSpotError(RuntimeError):
+    """An API error with HubSpot's own explanation attached."""
+
+
 # Contacts expose their modification time under a different property name than
 # every other CRM object. Filtering contacts on hs_lastmodifieddate does not
 # error, it silently returns zero results, so an incremental run would quietly
@@ -55,12 +60,17 @@ class HubSpotClient:
             if response.status_code < 400:
                 return response.json()
             if response.status_code != 429 and response.status_code < 500:
-                response.raise_for_status()
+                raise HubSpotError(
+                    f"{method} {path} failed with HTTP {response.status_code}: {response.text[:1000]}"
+                )
             if attempt == 5:
-                response.raise_for_status()
+                raise HubSpotError(
+                    f"{method} {path} still failing with HTTP {response.status_code} "
+                    f"after {attempt} retries: {response.text[:500]}"
+                )
             delay = float(response.headers.get("Retry-After", 2**attempt))
             time.sleep(min(delay, 30))
-        raise RuntimeError("retry loop exhausted")
+        raise HubSpotError(f"{method} {path}: retry loop exhausted")
 
     def iter_objects(
         self, object_type: str, properties: list[str], modified_after: datetime | None

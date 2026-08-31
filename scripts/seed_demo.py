@@ -69,7 +69,7 @@ def associate_batch(client: HubSpotClient, from_type: str, to_type: str, pairs: 
             f"/crm/v4/associations/{from_type}/{to_type}/batch/create",
             json={"inputs": [
                 {
-                    "_from": {"id": from_id},
+                    "from": {"id": from_id},
                     "to": {"id": to_id},
                     "types": [{"associationCategory": "HUBSPOT_DEFINED", "associationTypeId": type_id}],
                 }

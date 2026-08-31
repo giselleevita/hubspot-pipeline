@@ -63,6 +63,26 @@ The dataset is deliberate rather than uniform. It contains deals attached to two
 
 The other four: pipeline created per month, accounts ranked by open pipeline through the bridge, accounts holding deals with nobody attached, and how often a deal is shared between companies. That last one is the number that decides whether the bridge table earns its place. Here it is 8 deals out of 120, which is the difference between a correct answer and a quietly wrong one for those eight.
 
+## What a run actually looks like
+
+Against a test portal seeded with 60 companies, 240 contacts, 120 deals and 575 association edges, with the lookback shortened to a minute so the behaviour is visible in one sitting:
+
+```text
+started_at             status    object_counts
+2026-08-31 14:23:57    success   {"companies": 62, "contacts": 242, "deals": 120}   full refresh
+2026-08-31 14:25:12    success   {"companies": 61, "contacts": 235, "deals": 120}
+2026-08-31 14:26:30    success   {"companies": 56, "contacts": 24,  "deals": 120}
+2026-08-31 14:27:15    success   {"companies": 0,  "contacts": 0,   "deals": 0}     warning raised
+```
+
+Two things in that table are worth more than the fact that it ran.
+
+The counts decay rather than dropping to zero at once, because each run re-reads its lookback window and the records were written minutes earlier. That is the overlap doing its job, and the upserts are what make it cost nothing.
+
+The deals stay at 120 for two runs after the seed. HubSpot recalculates deal properties asynchronously after a write, and that recalculation bumps `hs_lastmodifieddate` a couple of minutes later, so those deals genuinely had changed. An incremental run immediately after a bulk change re-reading everything is the source behaving normally, not the watermark failing, and it is the sort of thing that looks like a bug at 9am if nobody wrote it down.
+
+The last run loaded nothing, printed the warning, and would have exited non-zero under `FAIL_ON_EMPTY_RUN`.
+
 ## Design answers
 
 - Raw JSON preserves source fidelity and makes transformation changes replayable without calling HubSpot again.

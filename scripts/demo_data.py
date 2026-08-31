@@ -30,6 +30,10 @@ STAGES = [
 
 COUNTRIES = ["Denmark", "United Kingdom", "Germany", "Norway", "Sweden"]
 INDUSTRIES = ["EDUCATION_MANAGEMENT", "PRIMARY_SECONDARY_EDUCATION", "NON_PROFIT_ORGANIZATION_MANAGEMENT"]
+# HubSpot validates email addresses on write and refuses the .example TLD, so
+# demo contacts live on example.com, the reserved documentation domain.
+EMAIL_DOMAIN = "demo.example.com"
+
 FIRST_NAMES = ["Anna", "Mikkel", "Sofia", "Jonas", "Freja", "Lucas", "Emma", "Noah", "Clara", "Elias"]
 LAST_NAMES = ["Jensen", "Nielsen", "Hansen", "Pedersen", "Andersen", "Schmidt", "Müller", "Berg", "Lund", "Holm"]
 
@@ -77,12 +81,12 @@ def generate(now: datetime | None = None, seed: int = 20260831) -> dict:
         created = now - timedelta(days=rng.randint(1, HORIZON_DAYS), minutes=rng.randint(0, 1440))
         modified = created + timedelta(days=rng.randint(0, 45))
         contacts.append({
-            "key": f"gtm-demo-{index}@famly-demo.example",
+            "key": f"gtm-demo-{index}@demo.example.com",
             # One in twelve contacts has no company. A dimension that assumed
             # otherwise would drop them.
             "company_index": None if index % 12 == 0 else (index % COMPANY_COUNT),
             "properties": {
-                "email": f"gtm-demo-{index}@famly-demo.example",
+                "email": f"gtm-demo-{index}@demo.example.com",
                 "firstname": rng.choice(FIRST_NAMES),
                 "lastname": rng.choice(LAST_NAMES),
                 # Contacts carry lastmodifieddate, not hs_lastmodifieddate.
