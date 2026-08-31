@@ -1,0 +1,43 @@
+name: pipeline
+on:
+  push:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+jobs:
+  test-and-run:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: pipeline
+          POSTGRES_PASSWORD: pipeline
+          POSTGRES_DB: hubspot
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U pipeline -d hubspot"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      HUBSPOT_ACCESS_TOKEN: ${{ secrets.HUBSPOT_ACCESS_TOKEN }}
+      DATABASE_URL: postgresql://pipeline:pipeline@localhost:5432/hubspot
+      DBT_HOST: localhost
+      DBT_USER: pipeline
+      DBT_PASSWORD: pipeline
+      DBT_DBNAME: hubspot
+      DBT_PORT: 5432
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: pytest -q
+      - name: Run integration pipeline
+        if: env.HUBSPOT_ACCESS_TOKEN != ''
+        run: ./run_pipeline.sh
+      - name: Explain skipped integration
+        if: env.HUBSPOT_ACCESS_TOKEN == ''
+        run: echo "Integration skipped because HUBSPOT_ACCESS_TOKEN is not configured"

@@ -1,0 +1,60 @@
+version: 2
+models:
+  - name: dim_contact
+    columns:
+      - name: contact_id
+        tests: [not_null, unique]
+  - name: dim_company
+    columns:
+      - name: company_id
+        tests: [not_null, unique]
+  - name: fct_deal
+    columns:
+      - name: deal_id
+        tests: [not_null, unique]
+  - name: bridge_deal_contact
+    columns:
+      - name: deal_id
+        tests:
+          - relationships:
+              arguments:
+                to: ref('fct_deal')
+                field: deal_id
+      - name: contact_id
+        tests:
+          - relationships:
+              arguments:
+                to: ref('dim_contact')
+                field: contact_id
+  - name: bridge_deal_company
+    columns:
+      - name: deal_id
+        tests:
+          - relationships:
+              arguments:
+                to: ref('fct_deal')
+                field: deal_id
+      - name: company_id
+        tests:
+          - relationships:
+              arguments:
+                to: ref('dim_company')
+                field: company_id
+  - name: bridge_contact_company
+    columns:
+      - name: contact_id
+        tests:
+          - relationships:
+              arguments:
+                to: ref('dim_contact')
+                field: contact_id
+      - name: company_id
+        tests:
+          - relationships:
+              arguments:
+                to: ref('dim_company')
+                field: company_id
+  - name: fct_deal_stage_daily
+    columns:
+      - name: activity_date
+        tests: [not_null]

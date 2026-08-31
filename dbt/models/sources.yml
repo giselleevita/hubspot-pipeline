@@ -1,0 +1,11 @@
+version: 2
+sources:
+  - name: hubspot_raw
+    schema: raw
+    tables:
+      - name: contacts
+      - name: companies
+      - name: deals
+      - name: contacts_companies
+      - name: deals_contacts
+      - name: deals_companies
