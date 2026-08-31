@@ -15,7 +15,11 @@ HubSpot API
 
 The fact table grain is one row per HubSpot deal because a deal is the unit whose value and stage the commercial team measures. Associations are separate bridge tables because forcing multiple contacts or companies into one foreign key silently loses information. Contact and company are current-state (Type 1) dimensions: changed emails or names overwrite the prior value. If historical attributes mattered—for example, attributing pipeline to the company segment at the time of creation—I would add effective dates and current-row flags as Type 2 dimensions.
 
-I chose a conservative high-watermark: each object watermark is the run start, written only after its upserts commit. Records changed during a run are therefore eligible again on the next run, and primary-key upserts make that overlap safe. At higher volume I would stream pages into batched inserts rather than holding one object page set in memory, and would use an overlap/lookback window to tolerate source clock and indexing lag.
+I chose a conservative high-watermark: each object watermark is the run start, written only after its upserts commit, and every run re-reads a five minute overlap before it. Records changed during a run, and records whose changes had not yet reached the search index when the run started, are therefore eligible again next time. Primary-key upserts make that overlap free. At higher volume I would stream pages into batched inserts rather than holding one object page set in memory.
+
+Two API details cost more than the rest of the extractor put together. Contacts answer to `lastmodifieddate` while companies and deals answer to `hs_lastmodifieddate`, and filtering contacts on the wrong one does not fail, it returns zero results, so an incremental run would have quietly stopped seeing contact changes after the first load. `stg_hubspot__contacts` now carries a `not_null` test on `modified_at_utc`, which is what turns that class of mistake into a failing build. The search endpoint also refuses to page past 10,000 results, so incremental queries sort ascending by modification time and re-anchor on the last record seen instead of stopping there.
+
+Associations are read through the v4 batch endpoint, 100 objects per call, rather than one call per object per association type. Objects that come back with no associations still matter: their rows are deleted before insert, because a link removed in HubSpot has no row to update and would otherwise survive forever.
 
 This version does not handle schema-drift detection, source object deletions, association history, or true deal-stage snapshots. `fct_deal_stage_daily` groups current deals by creation date and current stage; reconstructing stage-as-of-day requires HubSpot property history. It also uses single-node PostgreSQL rather than AWS-managed storage and compute. At Famly scale I would land immutable batches in S3, orchestrate with a managed scheduler, add explicit contracts and freshness alerts, and publish marts through atomic swaps.
 
@@ -30,7 +34,7 @@ docker compose --profile run run --rm pipeline
 
 Use `docker compose --profile run run --rm -e FULL_REFRESH=true pipeline` for an intentional backfill. Normal scheduled runs use per-object high-watermarks.
 
-Run unit tests locally with `python -m pytest -q`. Inspect `pipeline_runs` to see start/end time, status, extracted row counts, and errors. A successful run with all-zero counts is visible there and should become an alert in production.
+Run unit tests locally with `python -m pytest -q`: 17 tests covering pagination, the per-object modification property, re-anchoring at the search cap, retry and backoff, the lookback window, and the association delete-before-insert rule. None of them need a network or a database. `dbt test` adds 22 tests over the built models. Inspect `pipeline_runs` for start and end time, status, extracted row counts, and errors. A run that loads nothing prints a warning and, with `FAIL_ON_EMPTY_RUN=true`, exits non-zero.
 
 To seed an authorized HubSpot test portal with deterministic demo companies, contacts, deals, and associations, temporarily add the three CRM `write` scopes and run `docker compose --profile run run --rm --entrypoint python pipeline -m scripts.seed_demo`. Remove the write scopes afterwards; the pipeline itself only needs read access.
 

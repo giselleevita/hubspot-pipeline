@@ -3,19 +3,49 @@ from __future__ import annotations
 import json
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import psycopg
 
-from extract.client import HubSpotClient
+from extract.client import HubSpotClient, modified_property
 from extract.state import ensure_metadata, get_watermark, set_watermark
 
 OBJECTS = {
-    "contacts": ["email", "firstname", "lastname", "createdate", "hs_lastmodifieddate"],
+    "contacts": ["email", "firstname", "lastname", "createdate", "lastmodifieddate"],
     "companies": ["name", "domain", "industry", "createdate", "hs_lastmodifieddate"],
     "deals": ["dealname", "amount", "dealstage", "createdate", "closedate", "hs_lastmodifieddate"],
 }
 ASSOCIATIONS = {"contacts": ["companies"], "deals": ["contacts", "companies"]}
+
+# Search results are indexed with a short lag, and a record modified while an
+# extract is running would otherwise fall between the read and the watermark.
+# Re-reading a few minutes of overlap closes both gaps, and upserts make the
+# repeated read free.
+DEFAULT_LOOKBACK_MINUTES = 5
+
+
+def lookback_minutes() -> int:
+    raw = os.getenv("EXTRACT_LOOKBACK_MINUTES", "")
+    if not raw:
+        return DEFAULT_LOOKBACK_MINUTES
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise ValueError(f"EXTRACT_LOOKBACK_MINUTES must be an integer, got {raw!r}") from exc
+
+
+def full_refresh_requested() -> bool:
+    return os.getenv("FULL_REFRESH", "").lower() in {"1", "true", "yes"}
+
+
+def extract_from(conn, object_type: str) -> datetime | None:
+    """Where this object's extract should start, lookback included."""
+    if full_refresh_requested():
+        return None
+    watermark = get_watermark(conn, object_type)
+    if watermark is None:
+        return None
+    return watermark - timedelta(minutes=lookback_minutes())
 
 
 def ensure_raw_table(conn, object_type: str) -> None:
@@ -46,14 +76,21 @@ def ensure_association_table(conn, from_type: str, to_type: str) -> str:
     return table
 
 
-def load_associations(conn, client, from_type: str, object_ids: list[str], ingested_at: datetime) -> int:
+def load_associations(
+    conn, client, from_type: str, object_ids: list[str], ingested_at: datetime
+) -> int:
     loaded = 0
     for to_type in ASSOCIATIONS.get(from_type, []):
         table = ensure_association_table(conn, from_type, to_type)
-        for object_id in object_ids:
-            results = list(client.iter_associations(from_type, object_id, to_type))
-            with conn.cursor() as cur:
-                # The API response is authoritative for the processed object, including removals.
+        if not object_ids:
+            continue
+        by_object = client.read_associations(from_type, to_type, object_ids)
+        with conn.cursor() as cur:
+            for object_id, results in by_object.items():
+                # The response is authoritative for every object we asked
+                # about, including the ones that came back with nothing. A
+                # link removed in HubSpot has no row to update, so the stale
+                # edge only disappears if the object's rows are cleared first.
                 cur.execute(f"DELETE FROM raw.{table} WHERE from_object_id = %s", (object_id,))
                 for result in results:
                     for association in result.get("associationTypes", []):
@@ -64,8 +101,11 @@ def load_associations(conn, client, from_type: str, object_ids: list[str], inges
                             ON CONFLICT (from_object_id, to_object_id, association_type)
                             DO UPDATE SET payload=EXCLUDED.payload, ingested_at=EXCLUDED.ingested_at
                         """, (
-                            object_id, str(result["toObjectId"]), association.get("label") or association.get("typeId"),
-                            json.dumps(result), ingested_at,
+                            object_id,
+                            str(result["toObjectId"]),
+                            str(association.get("label") or association.get("typeId")),
+                            json.dumps(result),
+                            ingested_at,
                         ))
                         loaded += 1
     return loaded
@@ -73,8 +113,8 @@ def load_associations(conn, client, from_type: str, object_ids: list[str], inges
 
 def extract_object(conn, client: HubSpotClient, object_type: str, run_started: datetime) -> int:
     ensure_raw_table(conn, object_type)
-    watermark = None if os.getenv("FULL_REFRESH", "").lower() in {"1", "true", "yes"} else get_watermark(conn, object_type)
-    rows = list(client.iter_objects(object_type, OBJECTS[object_type], watermark))
+    modified_after = extract_from(conn, object_type)
+    rows = list(client.iter_objects(object_type, OBJECTS[object_type], modified_after))
     with conn.cursor() as cur:
         for row in rows:
             cur.execute(f"""
@@ -84,7 +124,9 @@ def extract_object(conn, client: HubSpotClient, object_type: str, run_started: d
                     payload = EXCLUDED.payload, ingested_at = EXCLUDED.ingested_at
             """, (str(row["id"]), json.dumps(row), run_started))
         load_associations(conn, client, object_type, [str(row["id"]) for row in rows], run_started)
-        # Advancing only after all upserts prevents a partial load from losing records.
+        # Advancing only after all upserts prevents a partial load from losing
+        # records. The value is the run start rather than the newest record, so
+        # anything modified during the run is still eligible next time.
         set_watermark(conn, object_type, run_started)
     conn.commit()
     return len(rows)

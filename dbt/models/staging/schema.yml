@@ -4,11 +4,21 @@ models:
     columns:
       - name: contact_id
         tests: [not_null, unique]
+      - name: modified_at_utc
+        # Contacts and the other objects name this property differently. A null
+        # here means the extractor asked HubSpot for a property it does not
+        # populate, which is exactly how an incremental filter silently stops
+        # returning rows.
+        tests: [not_null]
   - name: stg_hubspot__companies
     columns:
       - name: company_id
         tests: [not_null, unique]
+      - name: modified_at_utc
+        tests: [not_null]
   - name: stg_hubspot__deals
     columns:
       - name: deal_id
         tests: [not_null, unique]
+      - name: modified_at_utc
+        tests: [not_null]
