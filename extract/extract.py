@@ -12,7 +12,7 @@ from extract.state import ensure_metadata, get_watermark, set_watermark
 
 OBJECTS = {
     "contacts": ["email", "firstname", "lastname", "createdate", "lastmodifieddate"],
-    "companies": ["name", "domain", "industry", "createdate", "hs_lastmodifieddate"],
+    "companies": ["name", "domain", "industry", "country", "numberofemployees", "createdate", "hs_lastmodifieddate"],
     "deals": ["dealname", "amount", "dealstage", "createdate", "closedate", "hs_lastmodifieddate"],
 }
 ASSOCIATIONS = {"contacts": ["companies"], "deals": ["contacts", "companies"]}

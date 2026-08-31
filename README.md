@@ -34,9 +34,34 @@ docker compose --profile run run --rm pipeline
 
 Use `docker compose --profile run run --rm -e FULL_REFRESH=true pipeline` for an intentional backfill. Normal scheduled runs use per-object high-watermarks.
 
-Run unit tests locally with `python -m pytest -q`: 17 tests covering pagination, the per-object modification property, re-anchoring at the search cap, retry and backoff, the lookback window, and the association delete-before-insert rule. None of them need a network or a database. `dbt test` adds 22 tests over the built models. Inspect `pipeline_runs` for start and end time, status, extracted row counts, and errors. A run that loads nothing prints a warning and, with `FAIL_ON_EMPTY_RUN=true`, exits non-zero.
+Run unit tests locally with `python -m pytest -q`: 25 tests covering pagination, the per-object modification property, re-anchoring at the search cap, retry and backoff, the lookback window, the association delete-before-insert rule, and the shape of the demo dataset itself. None of them need a network or a database. `dbt build` runs 13 models and 22 tests. Inspect `pipeline_runs` for start and end time, status, extracted row counts, and errors. A run that loads nothing prints a warning and, with `FAIL_ON_EMPTY_RUN=true`, exits non-zero.
 
-To seed an authorized HubSpot test portal with deterministic demo companies, contacts, deals, and associations, temporarily add the three CRM `write` scopes and run `docker compose --profile run run --rm --entrypoint python pipeline -m scripts.seed_demo`. Remove the write scopes afterwards; the pipeline itself only needs read access.
+### Data to run it against
+
+Two ways, and neither of them is "trust the screenshot".
+
+**Without a HubSpot token.** `python -m scripts.load_fixture` generates 60 companies, 240 contacts and 120 deals and writes them straight into the raw layer of a separate `hubspot_demo` database, then `dbt build --project-dir dbt --profiles-dir dbt --target demo` builds every model over them. Separate database, because generated rows must never mix with records extracted from a real portal.
+
+**With one.** `python -m scripts.seed_demo --dry-run` shows what would be created; without the flag it pushes the same dataset into a test portal in batches of 100. It needs `crm.objects.{contacts,companies,deals}.write` on the private app, which the pipeline itself never uses, so add the scopes, seed, and remove them again. HubSpot sets creation timestamps itself, so seeded records all carry today's created date; the fixture path keeps the full eighteen month spread.
+
+The dataset is deliberate rather than uniform. It contains deals attached to two companies, deals with no contact, contacts with no company, and deals with no amount, because those are the cases the model claims to handle and a uniform fixture would let all four go untested.
+
+## What the marts answer
+
+`analytics/gtm_questions.sql` holds the five questions this exists to answer. Against the generated dataset:
+
+```text
+      deal_stage       | deals | pipeline_value | avg_deal_value | deals_missing_amount
+-----------------------+-------+----------------+----------------+----------------------
+ appointmentscheduled  |    36 |      916500.00 |          25458 |                    0
+ qualifiedtobuy        |    28 |      637000.00 |          23593 |                    1
+ closedwon             |    13 |      410000.00 |          31538 |                    0
+ presentationscheduled |    20 |      314750.00 |          19672 |                    4
+ closedlost            |    10 |      295750.00 |          29575 |                    0
+ decisionmakerboughtin |    13 |      271250.00 |          22604 |                    1
+```
+
+The other four: pipeline created per month, accounts ranked by open pipeline through the bridge, accounts holding deals with nobody attached, and how often a deal is shared between companies. That last one is the number that decides whether the bridge table earns its place. Here it is 8 deals out of 120, which is the difference between a correct answer and a quietly wrong one for those eight.
 
 ## Design answers
 

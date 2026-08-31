@@ -1,74 +1,129 @@
-"""Create deterministic GTM demo records in a HubSpot test portal.
+"""Seed a HubSpot test portal with the demo dataset.
 
-Requires crm.objects.{contacts,companies,deals}.write. Re-running is safe because
-records are found by deterministic domain, email, or deal name before creation.
+Needs crm.objects.{contacts,companies,deals}.write on the private app, which
+the pipeline itself does not use. Add the scopes, seed, then remove them: the
+extractor only ever reads.
+
+    python -m scripts.seed_demo --dry-run   # show what would be created
+    python -m scripts.seed_demo
+
+Re-running is safe. Existing records are matched on a deterministic key
+(company domain, contact email, deal name) and skipped, and associations are
+idempotent on HubSpot's side.
 """
 from __future__ import annotations
 
+import argparse
 import os
-from datetime import date, timedelta
 
 from extract.client import HubSpotClient
+from scripts.demo_data import generate, summary
+
+BATCH_SIZE = 100
+
+KEY_PROPERTY = {"companies": "domain", "contacts": "email", "deals": "dealname"}
+
+# HubSpot's default association type ids.
+ASSOCIATION_TYPE = {
+    ("contacts", "companies"): 1,
+    ("deals", "contacts"): 3,
+    ("deals", "companies"): 5,
+}
 
 
-def find_one(client, object_type: str, property_name: str, value: str):
-    page = client._request("POST", f"/crm/v3/objects/{object_type}/search", json={
-        "filterGroups": [{"filters": [{"propertyName": property_name, "operator": "EQ", "value": value}]}],
-        "properties": [property_name], "limit": 1,
-    })
-    results = page.get("results", [])
-    return results[0] if results else None
+def existing_by_key(client: HubSpotClient, object_type: str) -> dict[str, str]:
+    """Every record already in the portal, keyed by the property we seed on."""
+    key = KEY_PROPERTY[object_type]
+    found: dict[str, str] = {}
+    for record in client.iter_objects(object_type, [key], None):
+        value = record.get("properties", {}).get(key)
+        if value:
+            found[value] = str(record["id"])
+    return found
 
 
-def get_or_create(client, object_type: str, key: str, properties: dict[str, str]):
-    existing = find_one(client, object_type, key, properties[key])
-    if existing:
-        return str(existing["id"]), False
-    created = client._request("POST", f"/crm/v3/objects/{object_type}", json={"properties": properties})
-    return str(created["id"]), True
+def create_batch(client: HubSpotClient, object_type: str, records: list[dict]) -> dict[str, str]:
+    created: dict[str, str] = {}
+    key = KEY_PROPERTY[object_type]
+    for start in range(0, len(records), BATCH_SIZE):
+        chunk = records[start : start + BATCH_SIZE]
+        payload = {"inputs": [{"properties": _writable(record["properties"])} for record in chunk]}
+        response = client._request("POST", f"/crm/v3/objects/{object_type}/batch/create", json=payload)
+        for result in response.get("results", []):
+            created[result["properties"][key]] = str(result["id"])
+    return created
 
 
-def associate(client, from_type: str, from_id: str, to_type: str, to_id: str):
-    client._request(
-        "PUT", f"/crm/v4/objects/{from_type}/{from_id}/associations/default/{to_type}/{to_id}"
-    )
+def _writable(properties: dict) -> dict:
+    """Drop read-only fields. HubSpot sets creation and modification times itself."""
+    skip = {"createdate", "hs_lastmodifieddate", "lastmodifieddate"}
+    return {k: v for k, v in properties.items() if v is not None and k not in skip}
 
 
-def main():
+def associate_batch(client: HubSpotClient, from_type: str, to_type: str, pairs: list[tuple[str, str]]) -> int:
+    type_id = ASSOCIATION_TYPE[(from_type, to_type)]
+    for start in range(0, len(pairs), BATCH_SIZE):
+        chunk = pairs[start : start + BATCH_SIZE]
+        client._request(
+            "POST",
+            f"/crm/v4/associations/{from_type}/{to_type}/batch/create",
+            json={"inputs": [
+                {
+                    "_from": {"id": from_id},
+                    "to": {"id": to_id},
+                    "types": [{"associationCategory": "HUBSPOT_DEFINED", "associationTypeId": type_id}],
+                }
+                for from_id, to_id in chunk
+            ]},
+        )
+    return len(pairs)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Seed a HubSpot test portal with demo GTM records.")
+    parser.add_argument("--dry-run", action="store_true", help="Report what would be created and exit.")
+    args = parser.parse_args()
+
+    dataset = generate()
+    if args.dry_run:
+        print("Would seed:")
+        for key, value in summary(dataset).items():
+            print(f"  {key}: {value}")
+        return
+
     client = HubSpotClient(os.environ["HUBSPOT_ACCESS_TOKEN"])
-    stages = ["appointmentscheduled", "qualifiedtobuy", "presentationscheduled", "closedwon"]
-    counts = {"companies": 0, "contacts": 0, "deals": 0}
-    companies: list[str] = []
-    for i in range(1, 9):
-        company_id, created = get_or_create(client, "companies", "domain", {
-            "name": f"Famly Demo Nursery {i}", "domain": f"famly-demo-{i}.example",
-            "industry": "EDUCATION_MANAGEMENT",
-        })
-        companies.append(company_id)
-        counts["companies"] += int(created)
+    ids: dict[str, dict[str, str]] = {}
+    for object_type in ("companies", "contacts", "deals"):
+        present = existing_by_key(client, object_type)
+        missing = [record for record in dataset[object_type] if record["key"] not in present]
+        present.update(create_batch(client, object_type, missing))
+        ids[object_type] = present
+        print(f"{object_type}: {len(missing)} created, {len(dataset[object_type]) - len(missing)} already present")
 
-    contacts: list[str] = []
-    for i in range(1, 25):
-        company_id = companies[(i - 1) % len(companies)]
-        contact_id, created = get_or_create(client, "contacts", "email", {
-            "email": f"gtm-demo-{i}@famly-demo.example", "firstname": f"Demo{i}", "lastname": "Educator",
-        })
-        associate(client, "contacts", contact_id, "companies", company_id)
-        contacts.append(contact_id)
-        counts["contacts"] += int(created)
+    company_ids = [ids["companies"][c["key"]] for c in dataset["companies"]]
+    contact_ids = [ids["contacts"][c["key"]] for c in dataset["contacts"]]
+    deal_ids = [ids["deals"][d["key"]] for d in dataset["deals"]]
 
-    for i in range(1, 17):
-        company_id = companies[(i - 1) % len(companies)]
-        contact_id = contacts[(i - 1) % len(contacts)]
-        deal_id, created = get_or_create(client, "deals", "dealname", {
-            "dealname": f"Famly GTM Demo Deal {i}", "amount": str(2500 + i * 375),
-            "dealstage": stages[(i - 1) % len(stages)],
-            "closedate": str(date.today() + timedelta(days=i * 3)),
-        })
-        associate(client, "deals", deal_id, "contacts", contact_id)
-        associate(client, "deals", deal_id, "companies", company_id)
-        counts["deals"] += int(created)
-    print("Demo seed complete:", counts)
+    contact_company = [
+        (contact_ids[index], company_ids[contact["company_index"] - 1])
+        for index, contact in enumerate(dataset["contacts"])
+        if contact["company_index"]
+    ]
+    deal_contact = [
+        (deal_ids[index], contact_ids[contact_index - 1])
+        for index, deal in enumerate(dataset["deals"])
+        for contact_index in deal["contact_indexes"]
+    ]
+    deal_company = [
+        (deal_ids[index], company_ids[company_index - 1])
+        for index, deal in enumerate(dataset["deals"])
+        for company_index in deal["company_indexes"]
+    ]
+
+    print("associations:",
+          associate_batch(client, "contacts", "companies", contact_company),
+          associate_batch(client, "deals", "contacts", deal_contact),
+          associate_batch(client, "deals", "companies", deal_company))
 
 
 if __name__ == "__main__":

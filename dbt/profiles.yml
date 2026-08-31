@@ -10,3 +10,14 @@ hubspot_pipeline:
       dbname: "{{ env_var('DBT_DBNAME', 'hubspot') }}"
       schema: analytics
       threads: 4
+    demo:
+      # Generated fixtures only. Separate database so demo rows can never mix
+      # with records extracted from a real portal.
+      type: postgres
+      host: "{{ env_var('DBT_HOST', 'localhost') }}"
+      user: "{{ env_var('DBT_USER', 'pipeline') }}"
+      password: "{{ env_var('DBT_PASSWORD', 'pipeline') }}"
+      port: "{{ env_var('DBT_PORT', '5432') | int }}"
+      dbname: "{{ env_var('DEMO_DBNAME', 'hubspot_demo') }}"
+      schema: analytics
+      threads: 4
