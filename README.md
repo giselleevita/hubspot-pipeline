@@ -4,6 +4,8 @@
 
 This project incrementally extracts HubSpot contacts, companies, deals, and their many-to-many associations into PostgreSQL, then uses dbt to produce typed staging views and query-ready GTM marts. It is a small but production-shaped example of the system behind questions such as “which institutions have active opportunities, who is involved, and how much pipeline was created by stage?”
 
+**What this shows:** incremental extraction against a live API, watermarks written only after a successful load, idempotent upserts, many-to-many association modelling, PostgreSQL and dbt, 25 unit tests and 22 dbt tests in CI. Verified against a seeded test portal: 62 companies, 242 contacts, 120 deals, 1,171 association rows.
+
 ```text
 HubSpot API
   ├─ raw objects (source-faithful JSONB)
@@ -15,7 +17,7 @@ HubSpot API
             └─ bridge_{deal_contact, deal_company, contact_company}
 ```
 
-The fact table grain is one row per HubSpot deal because a deal is the unit whose value and stage the commercial team measures. Associations are separate bridge tables because forcing multiple contacts or companies into one foreign key silently loses information. Contact and company are current-state (Type 1) dimensions: changed emails or names overwrite the prior value. If historical attributes mattered—for example, attributing pipeline to the company segment at the time of creation—I would add effective dates and current-row flags as Type 2 dimensions.
+The fact table grain is one row per HubSpot deal because a deal is the unit whose value and stage the commercial team measures. Associations are separate bridge tables because forcing multiple contacts or companies into one foreign key silently loses information. Contact and company are current-state (Type 1) dimensions: changed emails or names overwrite the prior value. If historical attributes mattered, for example attributing pipeline to the company segment at the time of creation, I would add effective dates and current-row flags as Type 2 dimensions.
 
 I chose a conservative high-watermark: each object watermark is the run start, written only after its upserts commit, and every run re-reads a five minute overlap before it. Records changed during a run, and records whose changes had not yet reached the search index when the run started, are therefore eligible again next time. Primary-key upserts make that overlap free. At higher volume I would stream pages into batched inserts rather than holding one object page set in memory.
 
