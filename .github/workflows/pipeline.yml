@@ -34,7 +34,10 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -r requirements.txt
-      - run: pytest -q
+      # Run pytest as a module so the repository root is on sys.path in CI,
+      # matching the documented local command and allowing imports from
+      # extract/ and scripts/.
+      - run: python -m pytest -q
       - name: Run integration pipeline
         if: env.HUBSPOT_ACCESS_TOKEN != ''
         run: ./run_pipeline.sh

@@ -1,5 +1,7 @@
 # HubSpot → PostgreSQL pipeline
 
+[![pipeline](https://github.com/giselleevita/hubspot-pipeline/actions/workflows/pipeline.yml/badge.svg)](https://github.com/giselleevita/hubspot-pipeline/actions/workflows/pipeline.yml)
+
 This project incrementally extracts HubSpot contacts, companies, deals, and their many-to-many associations into PostgreSQL, then uses dbt to produce typed staging views and query-ready GTM marts. It is a small but production-shaped example of the system behind questions such as “which institutions have active opportunities, who is involved, and how much pipeline was created by stage?”
 
 ```text
