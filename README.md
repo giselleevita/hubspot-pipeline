@@ -111,3 +111,8 @@ from pipeline_runs order by started_at desc;
 ```
 
 A failed status is actionable immediately. An all-zero successful run emits a warning and should page only after considering expected source activity. Re-run safety comes from object-key upserts and composite association keys; the watermark advances only after the object transaction succeeds.
+
+## Licence
+
+Copyright (c) 2026 Giselle Evita Koch. Source-available for review, all rights
+reserved. See [LICENSE](LICENSE).
