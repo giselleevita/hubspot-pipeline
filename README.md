@@ -87,6 +87,8 @@ The deals stay at 120 for two runs after the seed. HubSpot recalculates deal pro
 
 The last run loaded nothing, printed the warning, and would have exited non-zero under `FAIL_ON_EMPTY_RUN`.
 
+See [docs/DESIGN.md](docs/DESIGN.md) for the dbt dependency graph and the reasoning behind grain, watermarking, and the two HubSpot API quirks that cost the most engineering time.
+
 ## Design answers
 
 - Raw JSON preserves source fidelity and makes transformation changes replayable without calling HubSpot again.
