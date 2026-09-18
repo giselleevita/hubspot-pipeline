@@ -5,9 +5,14 @@ on:
     - cron: "17 3 * * *"
   workflow_dispatch:
 
+concurrency:
+  group: hubspot-pipeline-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test-and-run:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     services:
       postgres:
         image: postgres:16-alpine
